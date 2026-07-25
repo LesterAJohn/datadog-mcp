@@ -14,6 +14,7 @@ Design guarantees:
 - All Datadog credentials and MCP HTTP tokens are stored in Vault.
 - All non-secret runtime configuration is stored in Postgres.
 - All operations are user-scoped (`app + user`) with deterministic path/table mapping.
+- Multi-instance Datadog operation is supported by using different `userId` values (one Datadog instance profile per `userId`).
 - Mutating operations can be protected with `MCP_ADMIN_AUTH_KEY`.
 
 Coverage strategy:
@@ -65,6 +66,64 @@ npm run start:stdio
 ```
 
 ## Persistence Model
+
+## Multi Datadog Instance Capability Via userId
+
+This MCP supports multiple Datadog instances by design through `userId` scoping.
+
+How it works:
+- Each `userId` has isolated Datadog credentials in Vault.
+- Each `userId` has isolated runtime config in Postgres (for example `datadog.site`, `datadog.timeoutMs`).
+- Each tool call can target a specific Datadog instance by passing the corresponding `userId`.
+
+Recommended pattern:
+- Map one Datadog instance/tenant/environment to one `userId`.
+- Example mappings: `us-prod`, `eu-prod`, `staging`, `sandbox`.
+
+Typical flow:
+1. Set credentials for a `userId` with `datadog_upsert_user_credentials`.
+2. Optionally set site/timeout using `datadog_set_user_config`.
+3. Invoke any Datadog operation with `datadog_invoke_operation` and the same `userId`.
+
+Example calls:
+
+```json
+{
+	"name": "datadog_upsert_user_credentials",
+	"arguments": {
+		"userId": "eu-prod",
+		"apiKey": "<dd-api-key>",
+		"applicationKey": "<dd-app-key>",
+		"site": "datadoghq.eu"
+	}
+}
+```
+
+```json
+{
+	"name": "datadog_set_user_config",
+	"arguments": {
+		"userId": "eu-prod",
+		"key": "datadog.timeoutMs",
+		"value": 20000
+	}
+}
+```
+
+```json
+{
+	"name": "datadog_invoke_operation",
+	"arguments": {
+		"userId": "eu-prod",
+		"operationId": "v1.AuthenticationApi.validate",
+		"params": {}
+	}
+}
+```
+
+Current scope detail:
+- One active Datadog credential/site profile per `userId`.
+- Multiple Datadog instances are supported by using multiple `userId` values.
 
 ### Secrets in Vault
 
