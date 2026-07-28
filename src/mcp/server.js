@@ -164,6 +164,336 @@ export function createMcpServer({ name, version, env, datadogService }) {
     return fallback;
   }
 
+  const TOOL_GUIDE = [
+    {
+      name: "datadog_connection_info",
+      category: "overview",
+      summary: "Return runtime, catalog, transport, and scope metadata.",
+      whenToUse: "You want a readiness snapshot before doing anything else.",
+      whenNotToUse: "You need user-specific credentials or Datadog operation details.",
+      params: "No parameters.",
+      responseShape: "{ ok, status, data: { server, datadogCatalog, transport, scopeModel } }",
+      prerequisites: "None.",
+      followUps: "datadog_scope_info, datadog_list_operations, datadog_tool_recommendations."
+    },
+    {
+      name: "datadog_scope_info",
+      category: "overview",
+      summary: "Return app/user scope paths for Postgres and Vault.",
+      whenToUse: "You need to map a userId to persistent storage paths.",
+      whenNotToUse: "You only need server-level metadata.",
+      params: "userId optional non-empty string.",
+      responseShape: "{ ok, status, data: scopeModel }",
+      prerequisites: "datadog_connection_info.",
+      followUps: "datadog_upsert_user_credentials, datadog_set_user_config."
+    },
+    {
+      name: "datadog_list_operations",
+      category: "operation discovery",
+      summary: "List Datadog SDK operations from the generated catalog.",
+      whenToUse: "You need to find candidate Datadog API operations.",
+      whenNotToUse: "You already know the exact operationId.",
+      params: "version/apiClass optional filters; mutating/unstable booleans; limit 1..500 default 200.",
+      responseShape: "{ ok, status, data: { count, operations[] } }",
+      prerequisites: "datadog_connection_info.",
+      followUps: "datadog_get_operation, datadog_invoke_operation."
+    },
+    {
+      name: "datadog_get_operation",
+      category: "operation discovery",
+      summary: "Return metadata for one Datadog operationId.",
+      whenToUse: "You need the exact request shape before invocation.",
+      whenNotToUse: "You need broad discovery across many APIs.",
+      params: "operationId required, format version.ApiClass.methodName.",
+      responseShape: "{ ok, status, data: operation }",
+      prerequisites: "datadog_list_operations.",
+      followUps: "datadog_invoke_operation."
+    },
+    {
+      name: "datadog_get_user_credential_metadata",
+      category: "credentials",
+      summary: "Return non-secret credential state for a user.",
+      whenToUse: "You need to verify whether Datadog credentials are configured.",
+      whenNotToUse: "You need to create, rotate, or delete credentials.",
+      params: "userId optional string; defaults to MCP_CONFIG_DEFAULT_USER_ID.",
+      responseShape: "{ ok, status, data: { userId, vaultPath, configured, apiKeyConfigured, applicationKeyConfigured, site, updatedAt } }",
+      prerequisites: "datadog_scope_info.",
+      followUps: "datadog_upsert_user_credentials, datadog_validate_user_credentials."
+    },
+    {
+      name: "datadog_upsert_user_credentials",
+      category: "credentials",
+      summary: "Create or update user-scoped Datadog API and application keys in Vault.",
+      whenToUse: "You are onboarding a user or rotating Datadog secrets.",
+      whenNotToUse: "You only need read-only checks or non-secret config changes.",
+      params: "apiKey and applicationKey required; site optional; userId optional; authorizationKey optional unless enforced.",
+      responseShape: "{ ok, status, data: { userId, site, apiKeyConfigured, applicationKeyConfigured, updatedAt } }",
+      prerequisites: "datadog_scope_info.",
+      followUps: "datadog_validate_user_credentials, datadog_invoke_operation."
+    },
+    {
+      name: "datadog_delete_user_credentials",
+      category: "credentials",
+      summary: "Delete user-scoped Datadog credential secret from Vault.",
+      whenToUse: "You are deprovisioning a user or forcing a full reset.",
+      whenNotToUse: "You can rotate credentials without deleting them.",
+      params: "userId optional; authorizationKey optional unless enforced.",
+      responseShape: "{ ok, status, data: { userId, deleted } }",
+      prerequisites: "datadog_get_user_credential_metadata.",
+      followUps: "datadog_upsert_user_credentials."
+    },
+    {
+      name: "datadog_validate_user_credentials",
+      category: "credentials",
+      summary: "Validate configured Datadog keys by calling the authentication endpoint.",
+      whenToUse: "You want to confirm that configured Datadog credentials work.",
+      whenNotToUse: "You are still creating or deleting the credentials.",
+      params: "userId optional.",
+      responseShape: "{ ok, status, data: invokeResult }",
+      prerequisites: "datadog_upsert_user_credentials.",
+      followUps: "datadog_invoke_operation."
+    },
+    {
+      name: "datadog_list_user_configs",
+      category: "config",
+      summary: "List user-scoped Postgres configuration entries for this app.",
+      whenToUse: "You want to inspect persisted runtime settings.",
+      whenNotToUse: "You only need one known key.",
+      params: "userId optional, prefix optional string filter.",
+      responseShape: "{ ok, status, data: rows[] }",
+      prerequisites: "datadog_scope_info.",
+      followUps: "datadog_get_user_config, datadog_set_user_config."
+    },
+    {
+      name: "datadog_get_user_config",
+      category: "config",
+      summary: "Get one user-scoped Postgres configuration key.",
+      whenToUse: "You need the effective value of a specific config key.",
+      whenNotToUse: "You need many keys; list them instead.",
+      params: "key required non-empty string; userId optional.",
+      responseShape: "{ ok, status, data: row|null }",
+      prerequisites: "datadog_scope_info.",
+      followUps: "datadog_set_user_config."
+    },
+    {
+      name: "datadog_set_user_config",
+      category: "config",
+      summary: "Set or update one user-scoped Postgres configuration key.",
+      whenToUse: "You need to persist runtime settings like site or timeout.",
+      whenNotToUse: "You are handling secrets; use Vault-backed tools instead.",
+      params: "key required; value any JSON type; userId optional; authorizationKey optional unless enforced.",
+      responseShape: "{ ok, status, data: row }",
+      prerequisites: "datadog_scope_info.",
+      followUps: "datadog_get_user_config, datadog_invoke_operation."
+    },
+    {
+      name: "datadog_delete_user_config",
+      category: "config",
+      summary: "Delete one user-scoped Postgres configuration key.",
+      whenToUse: "You want to clear a key and fall back to defaults.",
+      whenNotToUse: "You need to inspect current values first.",
+      params: "key required; userId optional; authorizationKey optional unless enforced.",
+      responseShape: "{ ok, status, data: { deleted, userId, key } }",
+      prerequisites: "datadog_get_user_config.",
+      followUps: "datadog_invoke_operation."
+    },
+    {
+      name: "datadog_create_or_update_user_token",
+      category: "tokens",
+      summary: "Create or update a user token in Vault token indexes.",
+      whenToUse: "You are provisioning or rotating MCP HTTP bearer tokens.",
+      whenNotToUse: "You are managing Datadog API credentials.",
+      params: "userId optional; token optional; tokenId/scopes/audience/expiresAt optional; authorizationKey optional unless enforced.",
+      responseShape: "{ ok, status, data: { userId, tokenId, tokenHash, token, scopes, audience, expiresAt, indexPaths[] } }",
+      prerequisites: "datadog_scope_info.",
+      followUps: "datadog_revoke_user_token, datadog_connection_info."
+    },
+    {
+      name: "datadog_revoke_user_token",
+      category: "tokens",
+      summary: "Revoke a user token in Vault token indexes.",
+      whenToUse: "A token is compromised or must be deprovisioned.",
+      whenNotToUse: "You only need a short-lived rotation path.",
+      params: "token or tokenHash required; userId optional; authorizationKey optional unless enforced.",
+      responseShape: "{ ok, status, data: { userId, tokenHash, revoked, indexPaths[] } }",
+      prerequisites: "datadog_create_or_update_user_token.",
+      followUps: "datadog_create_or_update_user_token."
+    },
+    {
+      name: "datadog_invoke_operation",
+      category: "execution",
+      summary: "Invoke any Datadog SDK operation from the generated catalog.",
+      whenToUse: "You know the operationId and want to call the Datadog API.",
+      whenNotToUse: "You are still exploring candidate endpoints.",
+      params: "operationId required; params optional; userId optional; enableUnstable optional; authorizationKey optional unless enforced for mutating operations.",
+      responseShape: "{ ok, status, data: { operationId, version, apiClass, methodName, httpMethod, pathTemplate, userId, site, response } }",
+      prerequisites: "datadog_get_operation and datadog_get_user_credential_metadata.",
+      followUps: "datadog_set_user_config, datadog_list_operations."
+    }
+  ];
+
+  function tokenizeQuery(query) {
+    return String(query ?? "")
+      .toLowerCase()
+      .match(/[a-z0-9]+/g) ?? [];
+  }
+
+  function scoreToolForQuery(tool, tokens) {
+    const haystack = [tool.name, tool.category, tool.summary, tool.whenToUse, tool.whenNotToUse, tool.params, tool.responseShape, tool.prerequisites, tool.followUps]
+      .join(" ")
+      .toLowerCase();
+
+    let score = 0;
+    for (const token of tokens) {
+      if (haystack.includes(token)) {
+        score += token.length >= 4 ? 2 : 1;
+      }
+    }
+
+    const queryText = tokens.join(" ");
+    if (tool.category === "operation discovery" && /schema|discover|find|search|operation|api/.test(queryText)) {
+      score += 5;
+    }
+    if (tool.category === "credentials" && /credential|secret|api key|application key|auth|validate|rotate/.test(queryText)) {
+      score += 5;
+    }
+    if (tool.category === "config" && /config|setting|preferences|timeout|site/.test(queryText)) {
+      score += 5;
+    }
+    if (tool.category === "tokens" && /token|bearer|http auth|http token|oauth/.test(queryText)) {
+      score += 5;
+    }
+    if (tool.category === "execution" && /invoke|call|run|execute|submit/.test(queryText)) {
+      score += 5;
+    }
+    if (tool.category === "overview" && /overview|start|begin|before|first|what can|how do/.test(queryText)) {
+      score += 4;
+    }
+
+    return score;
+  }
+
+  function buildRecommendationWorkflow(query) {
+    const queryText = tokenizeQuery(query).join(" ");
+    const workflow = [];
+    const pushUnique = (toolName) => {
+      if (!workflow.includes(toolName)) {
+        workflow.push(toolName);
+      }
+    };
+
+    const genericStart = ["datadog_connection_info", "datadog_scope_info", "datadog_tool_recommendations"];
+
+    if (/credential|secret|api key|application key|rotate|validate|auth/.test(queryText)) {
+      pushUnique("datadog_scope_info");
+      pushUnique("datadog_get_user_credential_metadata");
+      if (/validate|check|test/.test(queryText)) {
+        pushUnique("datadog_validate_user_credentials");
+      }
+      if (/create|update|rotate|provision|fix/.test(queryText)) {
+        pushUnique("datadog_upsert_user_credentials");
+      }
+    } else if (/token|bearer|http auth|mcp http|oauth/.test(queryText)) {
+      pushUnique("datadog_scope_info");
+      if (/revoke|disable|compromise/.test(queryText)) {
+        pushUnique("datadog_revoke_user_token");
+      } else {
+        pushUnique("datadog_create_or_update_user_token");
+        pushUnique("datadog_revoke_user_token");
+      }
+    } else if (/config|setting|timeout|site|preference/.test(queryText)) {
+      pushUnique("datadog_scope_info");
+      pushUnique("datadog_list_user_configs");
+      if (/get|find|show|current|effective/.test(queryText)) {
+        pushUnique("datadog_get_user_config");
+      }
+      if (/set|update|write|change|persist/.test(queryText)) {
+        pushUnique("datadog_set_user_config");
+      }
+      if (/delete|remove|clear|reset/.test(queryText)) {
+        pushUnique("datadog_delete_user_config");
+      }
+    } else if (/invoke|call|run|execute|datadog api|endpoint|operation/.test(queryText)) {
+      pushUnique("datadog_connection_info");
+      pushUnique("datadog_list_operations");
+      pushUnique("datadog_get_operation");
+      pushUnique("datadog_get_user_credential_metadata");
+      pushUnique("datadog_invoke_operation");
+    } else if (/discover|search|list|schema|shape|fields|what can|how do|help/.test(queryText)) {
+      pushUnique("datadog_connection_info");
+      pushUnique("datadog_list_operations");
+      pushUnique("datadog_get_operation");
+      pushUnique("datadog_tool_recommendations");
+    } else {
+      genericStart.forEach(pushUnique);
+      pushUnique("datadog_list_operations");
+      pushUnique("datadog_get_operation");
+      pushUnique("datadog_get_user_credential_metadata");
+      pushUnique("datadog_invoke_operation");
+    }
+
+    return workflow;
+  }
+
+  function buildToolGuide(query, topK = 5) {
+    const tokens = tokenizeQuery(query);
+    const scoredTools = TOOL_GUIDE
+      .map((tool) => ({
+        ...tool,
+        score: scoreToolForQuery(tool, tokens)
+      }))
+      .sort((left, right) => right.score - left.score || left.name.localeCompare(right.name));
+
+    const recommendations = scoredTools.slice(0, topK).map(({ score, ...tool }) => ({
+      toolName: tool.name,
+      category: tool.category,
+      score,
+      whyUse: tool.whenToUse,
+      schemaDiscovery: {
+        params: tool.params,
+        responseShape: tool.responseShape,
+        prerequisites: tool.prerequisites,
+        followUps: tool.followUps
+      }
+    }));
+
+    return {
+      query: String(query ?? ""),
+      workflow: buildRecommendationWorkflow(query),
+      recommendations,
+      catalog: scoredTools.map(({ score, ...tool }) => tool)
+    };
+  }
+
+  server.tool(
+    "datadog_tool_recommendations",
+    toolDescription({
+      summary: "Return ranked recommendations and schema-discovery guidance for every other MCP tool.",
+      whenToUse: "You want a query-suggestion layer that explains which tool to call next and what schema it expects.",
+      whenNotToUse: "You already know the exact tool and payload to use.",
+      risk: "read-only, low",
+      access: "read-only",
+      permissions: "No additional permissions required.",
+      environment: "Uses the built-in tool catalog and query keywords; no external service calls.",
+      params: "query required non-empty string; topK optional integer 1..10 default 5.",
+      responseShape: "{ ok, status, data: { query, workflow, recommendations[], catalog[] } }",
+      failures: "Invalid query or out-of-range topK.",
+      prerequisites: "datadog_connection_info.",
+      followUps: "datadog_list_operations, datadog_get_operation, datadog_invoke_operation.",
+      warning: "No destructive behavior.",
+      example: '{ "name": "datadog_tool_recommendations", "arguments": { "query": "How do I find the right Datadog API and its request schema?", "topK": 3 } }'
+    }),
+    {
+      query: z.string().min(1),
+      topK: z.number().int().min(1).max(10).optional()
+    },
+    withErrorHandling(async ({ query, topK }) => ({
+      ok: true,
+      status: 200,
+      data: buildToolGuide(query, topK ?? 5)
+    }))
+  );
+
   server.tool(
     "datadog_connection_info",
     toolDescription({

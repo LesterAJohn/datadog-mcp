@@ -34,6 +34,8 @@ test("README documents full Datadog operation coverage and persistence model", (
   assert.match(readme, /Datadog MCP/);
   assert.match(readme, /Vault-backed persistent secrets/);
   assert.match(readme, /Postgres-backed persistent configuration/);
+  assert.match(readme, /datadog_tool_recommendations/);
   assert.match(readme, /datadog_invoke_operation/);
   assert.match(readme, /Full Datadog API coverage/i);
+  assert.match(readme, /MIT License/i);
 });

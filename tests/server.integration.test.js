@@ -170,6 +170,30 @@ test("datadog_list_operations returns catalog entries", async () => {
   }
 });
 
+test("datadog_tool_recommendations returns a ranked discovery workflow", async () => {
+  const restore = setEnv({ MCP_ADMIN_AUTH_KEY: "" });
+
+  try {
+    const server = createMcpServer({
+      name: "datadog-mcp",
+      version: "0.1.0",
+      env: createEnv(),
+      datadogService: createDatadogServiceMock()
+    });
+
+    const { payload } = await invokeTool(server, "datadog_tool_recommendations", {
+      query: "I need to discover the right Datadog API and its request schema",
+      topK: 3
+    });
+
+    assert.equal(payload.ok, true);
+    assert.equal(payload.data.recommendations.length, 3);
+    assert.equal(payload.data.workflow.includes("datadog_list_operations"), true);
+  } finally {
+    restore();
+  }
+});
+
 test("mutating tools require authorizationKey when MCP_ADMIN_AUTH_KEY is configured", async () => {
   const restore = setEnv({ MCP_ADMIN_AUTH_KEY: "admin-key" });
 

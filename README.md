@@ -152,6 +152,7 @@ All tools return JSON via MCP text content:
 
 ### Read-Only Tools
 
+- `datadog_tool_recommendations`
 - `datadog_connection_info`
 - `datadog_scope_info`
 - `datadog_list_operations`
@@ -170,6 +171,19 @@ All tools return JSON via MCP text content:
 - `datadog_create_or_update_user_token`
 - `datadog_revoke_user_token`
 - `datadog_invoke_operation` (mutating only when target endpoint is mutating)
+
+### Query Suggestions And Schema Discovery
+
+Use `datadog_tool_recommendations` when you want the MCP itself to suggest the next tool, the likely call sequence, and the parameter schema to inspect before invoking Datadog, config, credential, or token operations.
+
+Typical outputs include:
+- a ranked list of tool recommendations for the query
+- a suggested workflow order
+- a compact schema-discovery summary for each recommended tool
+
+### License
+
+This repository is licensed under the MIT License.
 
 ### Tool Definition Quality (LLM-Facing)
 
